@@ -83,22 +83,100 @@ You should see something like:
 
 ## Test rotation pickup
 
-Rotate the secret and watch the app pick it up within one TTL window without
-any restart:
+There are two ways the app picks up a rotated secret: the natural TTL expiry
+(no app calls needed beyond a request that lands after the TTL window) and a
+forced re-read via the `/refresh` endpoint. Below is a walk-through of both,
+matching what you would do right after `azd up`.
+
+First, capture the app URL and Key Vault name:
 
 ```bash
+APP_URL=$(azd env get-values | awk -F= '/AZURE_CONTAINER_APP_FQDN/ {gsub(/"/,"",$2); print $2}')
 KV_NAME=$(azd env get-values | awk -F= '/KEY_VAULT_NAME/ {gsub(/"/,"",$2); print $2}')
-az keyvault secret set --vault-name "$KV_NAME" --name demo-secret --value "rotated-$(date +%s)"
-
-# Watch the value change once the cached entry expires (default 30s).
-watch -n 2 "curl -s https://$APP_URL/ | jq '{secret_value, secret_version, age_seconds}'"
 ```
 
-You can also force an immediate re-read instead of waiting for the TTL:
+### Option A: automatic pickup via TTL expiry (no app intervention)
+
+This is the path that matters in production. Rotate the secret in AKV, do
+nothing on the app side, and confirm the app serves the new value after the
+cache window elapses. No restarts, no revisions.
 
 ```bash
-curl https://$APP_URL/refresh
+# 1. Snapshot the current state
+curl -s https://$APP_URL/ | jq '{secret_value, secret_version, age_seconds, ttl_seconds}'
+
+# 2. Rotate the secret in AKV
+NEW_VALUE="auto-$(date +%s)"
+az keyvault secret set --vault-name "$KV_NAME" --name demo-secret --value "$NEW_VALUE" \
+  --query '{version:id, updated:attributes.updated}' -o json
+
+# 3. Hit the app immediately. You should still see the OLD value because the
+#    in-memory cache has not expired yet.
+curl -s https://$APP_URL/ | jq '{secret_value, age_seconds, seconds_until_refresh}'
+
+# 4. Wait just past the TTL window (default 30 seconds).
+sleep 35
+
+# 5. Hit the app again. The cached entry is now stale, so the next request
+#    re-reads from AKV and you should see the NEW value with age_seconds ~ 0.
+curl -s https://$APP_URL/ | jq '{secret_value, secret_version, age_seconds}'
 ```
+
+Expected output for steps 3 and 5:
+
+```text
+# Step 3 (immediate, still cached)
+{
+  "secret_value": "hello-from-akv-xxxxxxxx",
+  "age_seconds": 9.03,
+  "seconds_until_refresh": 20.97
+}
+
+# Step 5 (after TTL, auto-refreshed)
+{
+  "secret_value": "auto-1778861571",
+  "secret_version": "e3108bbf...",
+  "age_seconds": 0.0
+}
+```
+
+You can also leave a poll running so you can see the transition live:
+
+```bash
+while true; do
+  curl -s https://$APP_URL/ | jq -c '{value: .secret_value, ver: .secret_version, age: .age_seconds}'
+  sleep 3
+done
+```
+
+### Option B: forced refresh
+
+If you cannot wait for the TTL (for example you want an immediate rotation in
+test), hit `/refresh` to bypass the cache and re-read from AKV right away:
+
+```bash
+az keyvault secret set --vault-name "$KV_NAME" --name demo-secret --value "rotated-$(date +%s)" >/dev/null
+curl -s https://$APP_URL/refresh | jq '{status, secret_value, secret_version, age_seconds}'
+```
+
+### PowerShell equivalent (Windows)
+
+```powershell
+$URL = "https://" + (azd env get-values | Select-String AZURE_CONTAINER_APP_FQDN | ForEach-Object { ($_ -split '=')[1].Trim('"') })
+$KV  = (azd env get-values | Select-String KEY_VAULT_NAME | ForEach-Object { ($_ -split '=')[1].Trim('"') })
+
+az keyvault secret set --vault-name $KV --name demo-secret --value "auto-$(Get-Date -UFormat %s)" --query id -o tsv
+Start-Sleep 35
+curl.exe -s "$URL/" | ConvertFrom-Json | Select-Object secret_value, secret_version, age_seconds
+```
+
+### Tuning the TTL
+
+The default TTL is 30 seconds. Lower it for faster pickup at the cost of more
+AKV calls, or raise it if you have many replicas and want to spare AKV. Change
+the `secretTtlSeconds` parameter default in `infra/main.bicep`, or override the
+`SECRET_TTL_SECONDS` env var on the Container App directly and the next
+request after the change will use it.
 
 ## Configuration
 
