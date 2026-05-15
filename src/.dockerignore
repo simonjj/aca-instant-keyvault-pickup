@@ -1,6 +1,6 @@
-__pycache__
-*.pyc
-.venv
-venv
-.env
-*.log
+target
+.mvn
+.idea
+.vscode
+*.iml
+.DS_Store

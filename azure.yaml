@@ -5,8 +5,9 @@ metadata:
 services:
   web:
     project: ./src
-    language: python
+    language: java
     host: containerapp
     docker:
       path: Dockerfile
       context: .
+      remoteBuild: true

@@ -32,7 +32,8 @@ new version on its own.
   - `Key Vault Secrets Officer` on the vault to the deploying user (so you can
     rotate the secret to test pickup)
 
-The Container App runs a tiny Flask app that exposes three endpoints:
+The Container App runs a small Spring Boot app (Java 21) that exposes three
+endpoints:
 
 - `GET /` returns the cached secret value, version, age and seconds until the
   next refresh.
@@ -44,7 +45,8 @@ The Container App runs a tiny Flask app that exposes three endpoints:
 - An Azure subscription
 - [Azure Developer CLI](https://aka.ms/azd) (`azd`) 1.5.0 or later
 - [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) (`az`)
-- Docker (only needed if you want to run the app locally)
+- JDK 21 and Maven 3.9+ (only needed if you want to build and run the app locally; the container image builds inside Docker)
+- Docker (only needed if you want to run the container locally)
 
 ## Deploy
 
@@ -127,9 +129,7 @@ export SECRET_NAME=demo-secret
 export SECRET_TTL_SECONDS=10
 
 cd src
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-python app.py
+mvn spring-boot:run
 # Visit http://localhost:8080/
 ```
 
@@ -152,10 +152,15 @@ reuse the same name.
 │   ├── shared.bicep           all resources inside the RG
 │   └── main.parameters.json   maps azd env vars to Bicep parameters
 └── src/
-    ├── app.py                 Flask app with TTL-cached AKV read
-    ├── requirements.txt
-    ├── Dockerfile
-    └── .dockerignore
+    ├── pom.xml                Maven build (Spring Boot 3.3, Java 21)
+    ├── Dockerfile             multi-stage build: Maven + JDK 21
+    ├── .dockerignore
+    └── src/main/
+        ├── java/com/example/akvpickup/
+        │   ├── Application.java
+        │   ├── SecretCache.java        thread-safe TTL cache around AKV
+        │   └── SecretController.java   /, /refresh, /healthz endpoints
+        └── resources/application.properties
 ```
 
 ## Notes and trade-offs

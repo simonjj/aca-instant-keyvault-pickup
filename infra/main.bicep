@@ -23,7 +23,6 @@ param secretInitialValue string = 'hello-from-akv-${uniqueString(newGuid())}'
 param secretTtlSeconds int = 30
 
 var abbrs = {
-  resourceGroup: 'rg'
   keyVault: 'kv'
   managedIdentity: 'id'
   containerAppsEnv: 'cae'
@@ -35,7 +34,7 @@ var abbrs = {
 var resourceToken = toLower(uniqueString(subscription().id, environmentName, location))
 
 resource rg 'Microsoft.Resources/resourceGroups@2024-03-01' = {
-  name: '${abbrs.resourceGroup}-${environmentName}'
+  name: environmentName
   location: location
   tags: {
     'azd-env-name': environmentName
